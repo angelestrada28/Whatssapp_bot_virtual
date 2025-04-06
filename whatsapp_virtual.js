@@ -1,96 +1,84 @@
-// 📌 Importar dependencias necesarias
-const { Client, LocalAuth } = require("whatsapp-web.js");
-const qrcode = require("qrcode-terminal");
-const readline = require("readline");
 const xlsx = require("xlsx");
+const readline = require("readline");
+const { Client } = require("whatsapp-web.js");
+const qrcode = require("qrcode-terminal");
 const fs = require("fs");
 
-// 🟢 Configurar variables de entorno (para Railway)
-require("dotenv").config();
-
-// 🟢 Crear cliente de WhatsApp
-const client = new Client({
-    authStrategy: new LocalAuth(), // Guarda sesión para que no pida QR cada vez
-});
-
-// 🟢 Crear interfaz para entrada de usuario
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 });
 
-// 🟢 Función para preguntar al usuario
-const preguntar = (pregunta) => {
-    return new Promise(resolve => {
-        rl.question(pregunta, (respuesta) => {
-            resolve(respuesta);
-        });
-    });
-};
+const client = new Client();
 
-// 📌 Función para obtener contactos desde Excel
-const obtenerContactosDesdeExcel = async () => {
-    const archivo = await preguntar("📂 Ingresa el nombre del archivo de Excel (ej: contactos.xlsx): ");
-    
-    if (!fs.existsSync(archivo)) {
-        console.log("❌ El archivo no existe. Verifica el nombre e intenta de nuevo.");
-        rl.close();
-        process.exit(1);
-    }
-
-    const workbook = xlsx.readFile(archivo);
-    const hojas = workbook.SheetNames;
-    
-    console.log("\n📋 Hojas disponibles:");
-    hojas.forEach((hoja, i) => console.log(`${i + 1}. ${hoja}`));
-
-    const indice = await preguntar("\n🔢 Ingresa el número de la hoja que quieres usar: ");
-    const nombreHoja = hojas[indice - 1];
-
-    if (!nombreHoja) {
-        console.log("❌ Opción no válida.");
-        rl.close();
-        process.exit(1);
-    }
-
-    const worksheet = workbook.Sheets[nombreHoja];
-    const datos = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
-
-    // Se asume que los números están en la primera columna
-    const contactos = datos.map(row => row[0]).filter(numero => typeof numero === "number");
-
-    return contactos.map(numero => "52" + numero.toString() + "@c.us"); // Formato internacional
-};
-
-// 📌 Configuración del cliente WhatsApp
-client.on("qr", (qr) => {
-    console.log("Escanea este código QR con tu WhatsApp:");
+client.on("qr", qr => {
     qrcode.generate(qr, { small: true });
 });
 
 client.on("ready", async () => {
-    console.log("✅ Bot de WhatsApp conectado y listo para enviar mensajes.");
-
-    const contactos = await obtenerContactosDesdeExcel();
-    const mensaje = await preguntar("✍️ Escribe el mensaje a enviar: ");
+    console.log("✅ Cliente de WhatsApp listo!");
     
-    console.log(`📤 Enviando mensajes a ${contactos.length} contactos...`);
+    // Preguntar por el archivo de Excel
+    rl.question("📂 Ingresa la ruta del archivo Excel: ", (filePath) => {
+        if (!fs.existsSync(filePath)) {
+            console.log("❌ Archivo no encontrado. Verifica la ruta.");
+            rl.close();
+            return;
+        }
+        
+        // Cargar el archivo de Excel
+        const workbook = xlsx.readFile(filePath);
+        console.log("📑 Hojas disponibles: ", workbook.SheetNames);
+        
+        rl.question("📜 Ingresa el nombre de la hoja: ", (sheetName) => {
+            if (!workbook.SheetNames.includes(sheetName)) {
+                console.log("❌ Hoja no encontrada en el archivo.");
+                rl.close();
+                return;
+            }
+            
+            const sheet = workbook.Sheets[sheetName];
+            const data = xlsx.utils.sheet_to_json(sheet, { header: 1 });
 
-    for (const numero of contactos) {
-        client.sendMessage(numero, mensaje)
-            .then(() => console.log(`✅ Mensaje enviado a ${numero}`))
-            .catch(err => console.log(`❌ Error enviando a ${numero}: ${err}`));
-    }
+            // Extraer los números de la columna C (índice 2)
+            const phoneNumbers = data.slice(1).map(row => row[2]).filter(num => num);
 
-    rl.close();
+            if (phoneNumbers.length === 0) {
+                console.log("❌ No se encontraron números en la columna C.");
+                rl.close();
+                return;
+            }
+
+            console.log("📋 Números obtenidos:", phoneNumbers);
+
+            // Preguntar por el mensaje manualmente
+            rl.question("✍ Escribe el mensaje a enviar: ", async (message) => {
+                if (!message) {
+                    console.log("❌ No se puede enviar un mensaje vacío.");
+                    rl.close();
+                    return;
+                }
+                
+                console.log("📤 Enviando mensajes...");
+                
+                for (const phoneNumber of phoneNumbers) {
+                    const cleanNumber = phoneNumber.toString().trim();
+                    if (cleanNumber.length >= 10) {
+                        const formattedNumber = `52${cleanNumber}@c.us`;
+                        try {
+                            await client.sendMessage(formattedNumber, message);
+                            console.log(`✅ Mensaje enviado a: ${cleanNumber}`);
+                        } catch (error) {
+                            console.log(`❌ Error enviando a ${cleanNumber}:`, error);
+                        }
+                    }
+                }
+                
+                console.log("🏁 Proceso terminado.");
+                rl.close();
+            });
+        });
+    });
 });
 
-// 📌 Iniciar cliente
 client.initialize();
-
-// 🔹 Mantener servidor activo en Railway
-const PORT = process.env.PORT || 3000;
-require("http").createServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Bot de WhatsApp activo 🚀");
-}).listen(PORT, () => console.log(`Servidor corriendo en el puerto ${PORT}`));
